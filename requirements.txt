@@ -1,0 +1,22 @@
+numpy>=1.21.0
+scipy>=1.7.0
+torch>=1.9.0
+soundfile>=0.10.0
+
+# Для извлечения просодии из референсной речи
+# ВАЖНО: используйте praat-parselmouth, а не parselmouth!
+praat-parselmouth>=0.4.0
+
+# Для TTS (опционально, для естественного голоса)
+# Edge TTS (Microsoft, рекомендуется - простое и качественное)
+# Установка: pip install edge-tts pydub
+# Google TTS (альтернатива, требует интернет)
+# Установка: pip install gtts pydub
+# Silero TTS (offline, но может не работать)
+# Установка: pip install torch torchaudio
+# pyttsx3 (offline, низкое качество)
+# pyttsx3>=2.90
+
+# Примечание: praat-parselmouth включает в себя все необходимые зависимости
+# и работает с Python 3.12+
+
