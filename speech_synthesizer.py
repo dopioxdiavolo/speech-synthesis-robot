@@ -5,9 +5,13 @@
 - Артикуляторная модель (source-filter)
 - Управление просодией
 - Перенос просодии из референсной речи
+- Модель голосовых связок (vocal folds) с физиологическими параметрами
+- Визуализация мимики (facial expression)
+- Контроллер поведения (behavior controller)
 
-Поддерживает синтез с управляемыми просодическими параметрами
-и переносом просодии из референсных аудиофайлов.
+Поддерживает синтез с управляемыми просодическими параметрами,
+переносом просодии из референсных аудиофайлов и мультимодальную
+экспрессию (голос + мимика).
 """
 
 import numpy as np
@@ -17,6 +21,11 @@ from scipy.interpolate import interp1d
 from articulatory_model import ArticulatoryModel
 from prosody_controller import RuleBasedProsodyController
 from prosody_extraction import ProsodyExtractor
+
+# Импорт новых модулей для мультимодальной системы
+from vocal_folds import VocalFoldsModel, PhonationType
+from facial_expression import FacialExpressionRenderer, ExpressionState
+from behavior_controller import BehaviorController
 
 # Опциональный импорт TTS
 try:
@@ -41,9 +50,20 @@ class SpeechSynthesizer:
     
     Интегрирует артикуляторную модель и управление просодией
     для создания синтезированной речи с контролируемыми характеристиками.
+    
+    Мультимодальная система:
+    - Голос: модель голосовых связок с физиологическими параметрами
+    - Мимика: визуализация состояния экспрессии робота
+    - Поведение: координация голоса и мимики через BehaviorController
     """
     
-    def __init__(self, sample_rate: int = 16000, use_tts: bool = False, tts_engine: str = 'silero', use_ml_emotion: bool = True):
+    def __init__(self, 
+                 sample_rate: int = 16000, 
+                 use_tts: bool = False, 
+                 tts_engine: str = 'silero', 
+                 use_ml_emotion: bool = True,
+                 use_vocal_folds: bool = True,
+                 facial_render_method: str = 'emoji'):
         """
         Инициализация синтезатора.
         
@@ -58,11 +78,28 @@ class SpeechSynthesizer:
                       'silero' - Silero TTS (offline)
                       'pyttsx3' - pyttsx3 (offline, низкое качество)
             use_ml_emotion: Использовать ML модель для определения эмоций (True) или rule-based (False)
+            use_vocal_folds: Использовать физиологическую модель голосовых связок (True)
+            facial_render_method: Метод визуализации мимики ('emoji', 'matplotlib', 'pygame', 'streamlit')
         """
         self.sample_rate = sample_rate
         self.articulatory_model = ArticulatoryModel(sample_rate)
         self.prosody_controller = RuleBasedProsodyController(sample_rate)
         self.prosody_extractor = ProsodyExtractor(sample_rate)
+        
+        # Инициализация модели голосовых связок
+        self.use_vocal_folds = use_vocal_folds
+        self.vocal_folds_model = None
+        if use_vocal_folds:
+            self.vocal_folds_model = VocalFoldsModel(sample_rate)
+            print("✓ Модель голосовых связок инициализирована")
+        
+        # Инициализация визуализации мимики
+        self.facial_renderer = FacialExpressionRenderer(render_method=facial_render_method)
+        print(f"✓ Визуализация мимики инициализирована (метод: {facial_render_method})")
+        
+        # Инициализация контроллера поведения
+        self.behavior_controller = BehaviorController()
+        print("✓ Контроллер поведения инициализирован")
         
         # Инициализация детектора эмоций
         self.use_ml_emotion = use_ml_emotion and EMOTION_DETECTOR_AVAILABLE
@@ -185,9 +222,11 @@ class SpeechSynthesizer:
                          base_f0: Optional[float] = None,
                          duration_factor: Optional[float] = None,
                          use_tts_override: Optional[bool] = None,
-                         auto_detect_emotion: bool = True) -> np.ndarray:
+                         auto_detect_emotion: bool = True,
+                         internal_state: Optional[Dict] = None,
+                         show_facial_expression: bool = True) -> Tuple[np.ndarray, Optional[ExpressionState]]:
         """
-        Синтез фразы с автоматическим определением эмоции.
+        Синтез фразы с автоматическим определением эмоции и визуализацией мимики.
         
         Args:
             phrase: Текст фразы
@@ -197,9 +236,11 @@ class SpeechSynthesizer:
             duration_factor: Фактор длительности (если None, используется стиль)
             use_tts_override: Переопределить использование TTS (если None, используется self.use_tts)
             auto_detect_emotion: Автоматически определять эмоцию из текста (по умолчанию True)
+            internal_state: Внутреннее состояние робота (опционально)
+            show_facial_expression: Показывать визуализацию мимики (по умолчанию True)
             
         Returns:
-            Синтезированный аудиосигнал
+            (audio, facial_state): Синтезированный аудиосигнал и состояние мимики
         """
         # Автоматическое определение эмоции, если не указан стиль
         if style is None and auto_detect_emotion:
@@ -212,6 +253,20 @@ class SpeechSynthesizer:
                 print(f"🎭 Определена эмоция: {style} (rule-based)")
         elif style is None:
             style = 'neutral'
+        
+        # Вычисление состояния поведения через BehaviorController
+        voice_params, facial_state = self.behavior_controller.compute_behavior(style, internal_state)
+        
+        # Визуализация мимики
+        if show_facial_expression:
+            self.facial_renderer.set_expression(facial_state)
+            expression_display = self.facial_renderer.render()
+            if expression_display:
+                print(f"😊 Мимика: {expression_display}")
+        
+        # Использование параметров голоса из BehaviorController
+        if base_f0 is None:
+            base_f0 = voice_params['f0_base']
         
         # Определяем, использовать ли TTS
         use_tts = use_tts_override if use_tts_override is not None else self.use_tts
@@ -244,11 +299,12 @@ class SpeechSynthesizer:
                 
                 # Применяем нашу систему управления просодией
                 # Изменяем темп, громкость согласно стилю
+                # Также применяем параметры голосовых связок
                 modified_audio = self._apply_prosody_to_tts_audio(
-                    base_audio, style, base_f0, duration_factor
+                    base_audio, style, base_f0, duration_factor, voice_params
                 )
                 
-                return modified_audio
+                return modified_audio, facial_state
             except Exception as e:
                 print(f"⚠ Ошибка TTS синтеза: {e}, используем артикуляторную модель")
                 # Fallback на артикуляторную модель
@@ -260,7 +316,7 @@ class SpeechSynthesizer:
         
         if len(vowels) == 0:
             # Если нет гласных, возвращаем тишину
-            return np.array([])
+            return np.array([]), facial_state
         
         # Получение параметров стиля
         if duration_factor is None:
@@ -287,9 +343,10 @@ class SpeechSynthesizer:
                 segment_duration, style, num_syllables=len(vowels)
             )
             
-            # Синтез с динамическим F0
+            # Синтез с динамическим F0 (используем параметры голоса из BehaviorController)
             segment = self._synthesize_with_f0_contour(
-                vowel, segment_duration, f0_times, f0_values
+                vowel, segment_duration, f0_times, f0_values,
+                voice_params=voice_params
             )
             
             # Улучшенные переходы между сегментами
@@ -363,7 +420,7 @@ class SpeechSynthesizer:
         if np.max(np.abs(output)) > 0:
             output = output / np.max(np.abs(output)) * 0.9  # Немного тише
         
-        return output
+        return output, facial_state
     
     def synthesize_with_prosody_transfer(self,
                                         phrase: str,
@@ -497,15 +554,20 @@ class SpeechSynthesizer:
                                     vowel: str,
                                     duration: float,
                                     f0_times: np.ndarray,
-                                    f0_values: np.ndarray) -> np.ndarray:
+                                    f0_values: np.ndarray,
+                                    voice_params: Optional[Dict] = None) -> np.ndarray:
         """
         Синтез гласного с динамическим F0 контуром.
+        
+        Использует модель голосовых связок (vocal_folds), если доступна,
+        для более физиологически обоснованного синтеза источника.
         
         Args:
             vowel: Гласный звук
             duration: Длительность
             f0_times: Временные метки F0
             f0_values: Значения F0
+            voice_params: Параметры голоса из BehaviorController (опционально)
             
         Returns:
             Синтезированный сигнал
@@ -537,10 +599,29 @@ class SpeechSynthesizer:
             else:
                 seg_f0 = f0_mean
             
-            # Синтез сегмента
-            segment = self.articulatory_model.synthesize_vowel(
-                vowel, seg_duration, seg_f0
-            )
+            # Используем модель голосовых связок, если доступна
+            if self.use_vocal_folds and self.vocal_folds_model is not None and voice_params is not None:
+                # Генерируем источник с параметрами голосовых связок
+                source = self.vocal_folds_model.generate_source(
+                    duration=seg_duration,
+                    f0=seg_f0,
+                    jitter=voice_params.get('jitter'),
+                    shimmer=voice_params.get('shimmer'),
+                    phonation_type=voice_params.get('phonation_type', PhonationType.MODAL),
+                    vocal_effort=voice_params.get('vocal_effort', 1.0)
+                )
+                
+                # Применяем формантный фильтр артикуляторной модели
+                f1, f2, f3 = self.articulatory_model.VOWEL_FORMANTS.get(vowel.lower(), (730, 1090, 2440))
+                b, a = self.articulatory_model.create_formant_filter(f1, f2, f3)
+                from scipy import signal
+                segment = signal.lfilter(b, a, source)
+            else:
+                # Старый метод (через articulatory_model)
+                segment = self.articulatory_model.synthesize_vowel(
+                    vowel, seg_duration, seg_f0
+                )
+            
             segments.append(segment)
         
         return np.concatenate(segments)
@@ -549,23 +630,27 @@ class SpeechSynthesizer:
                                    audio: np.ndarray,
                                    style: str,
                                    base_f0: Optional[float] = None,
-                                   duration_factor: Optional[float] = None) -> np.ndarray:
+                                   duration_factor: Optional[float] = None,
+                                   voice_params: Optional[Dict] = None) -> np.ndarray:
         """
-        Применение просодии к аудио, сгенерированному TTS.
+        Применение просодии и параметров голосовых связок к аудио от TTS.
         
-        Изменяет темп и громкость согласно стилю.
-        Примечание: изменение F0 (pitch) сложнее и требует более продвинутых методов.
+        Изменяет темп, громкость и применяет параметры голосовых связок
+        (jitter, shimmer, phonation type) для более естественного звука.
         
         Args:
             audio: Базовое аудио от TTS
             style: Стиль речи
-            base_f0: Базовая частота F0 (не используется напрямую, но сохраняется для совместимости)
+            base_f0: Базовая частота F0
             duration_factor: Фактор длительности (если None, используется стиль)
+            voice_params: Параметры голосовых связок из BehaviorController
             
         Returns:
             Модифицированное аудио
         """
         from scipy import signal as scipy_signal
+        from scipy.ndimage import gaussian_filter1d
+        from scipy import signal
         
         # Получение параметров стиля
         if duration_factor is None:
@@ -576,6 +661,39 @@ class SpeechSynthesizer:
             original_length = len(audio)
             new_length = int(original_length * duration_factor)
             audio = scipy_signal.resample(audio, new_length)
+        
+        # Применение параметров голосовых связок (если доступны)
+        if voice_params is not None and self.use_vocal_folds:
+            # Применение shimmer (вариации амплитуды)
+            shimmer = voice_params.get('shimmer', 0.03)
+            if shimmer > 0:
+                # Генерируем медленные вариации амплитуды
+                num_samples = len(audio)
+                shimmer_signal = np.ones(num_samples)
+                # Добавляем медленные вариации (0.5-5 Гц)
+                for freq in [0.5, 1.0, 2.0, 3.0]:
+                    phase = np.random.uniform(0, 2 * np.pi)
+                    variation = np.sin(2 * np.pi * freq * np.linspace(0, num_samples / self.sample_rate, num_samples) + phase)
+                    shimmer_signal += variation * shimmer * 0.3
+                # Сглаживаем
+                shimmer_signal = gaussian_filter1d(shimmer_signal, sigma=num_samples / 1000)
+                # Нормализуем к диапазону [1-shimmer, 1+shimmer]
+                shimmer_signal = 1.0 + (shimmer_signal - 1.0) * shimmer * 2
+                audio = audio * shimmer_signal
+            
+            # Применение phonation type через спектральную фильтрацию
+            phonation_type = voice_params.get('phonation_type', PhonationType.MODAL)
+            if phonation_type == PhonationType.BREATHY:
+                # Добавляем высокочастотный шум (придыхание)
+                noise = np.random.normal(0, 0.05, len(audio))
+                b, a = signal.butter(4, 2000 / (self.sample_rate / 2), 'high')
+                noise = signal.filtfilt(b, a, noise)
+                audio = audio + noise
+            elif phonation_type == PhonationType.PRESSED:
+                # Подчёркиваем высокие частоты (более резкий звук)
+                b, a = signal.butter(2, 1500 / (self.sample_rate / 2), 'high')
+                high_boost = signal.filtfilt(b, a, audio) * 0.2
+                audio = audio + high_boost
         
         # Применение энергетического контура
         total_duration = len(audio) / self.sample_rate
