@@ -198,6 +198,10 @@ class FacialExpressionRenderer:
         
         params = self.EXPRESSION_PARAMS[state]
         
+        # Используем неинтерактивный backend для избежания проблем с потоками
+        import matplotlib
+        matplotlib.use('Agg')  # Неинтерактивный backend
+        
         if ax is None:
             fig, ax = plt.subplots(figsize=(8, 8), facecolor='white')
         else:
@@ -373,24 +377,10 @@ class FacialExpressionRenderer:
         fig.savefig(filename, dpi=150, bbox_inches='tight')
         print(f"📊 Визуализация сохранена: {filename}")
         
-        # Если создаётся новая фигура, показываем её
-        if fig is not None and (not hasattr(self, '_matplotlib_fig') or self._matplotlib_fig is None):
-            self._matplotlib_fig = fig
-            # Показываем окно (неблокирующий режим)
-            plt.ion()  # Интерактивный режим
-            plt.show(block=False)
-            plt.pause(2)  # Пауза 2 секунды, чтобы увидеть окно
-            print(f"📊 Окно matplotlib открыто (закроется автоматически)")
-        elif hasattr(self, '_matplotlib_fig') and self._matplotlib_fig is not None:
-            # Обновляем существующую фигуру
-            self._matplotlib_fig.canvas.draw()
-            self._matplotlib_fig.canvas.flush_events()
-            plt.pause(2)  # Пауза для просмотра
-        else:
-            # Просто показываем фигуру
-            plt.ion()
-            plt.show(block=False)
-            plt.pause(2)
+        # Закрываем фигуру чтобы избежать проблем с памятью и потоками
+        # На macOS нельзя создавать GUI окна в фоновых потоках
+        # Используем только сохранение в файл (backend 'Agg')
+        plt.close(fig)
         
         return ax
     

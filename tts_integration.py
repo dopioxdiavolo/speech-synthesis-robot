@@ -2,6 +2,7 @@
 Интеграция TTS моделей для естественного голоса с эмоциями.
 
 Поддерживает:
+- F5-TTS Russian (диффузионная модель, высокое качество, RTF < 1.0)
 - Coqui XTTS (лучшая для эмоций, открытая, поддерживает русский)
 - Bark (Suno AI, очень выразительная, поддерживает эмоции)
 - Edge TTS (Microsoft, бесплатная, хорошее качество)
@@ -663,6 +664,95 @@ class Pyttsx3TTS(TTSEngine):
                 os.remove(tmp_path)
 
 
+class F5TTSEngine(TTSEngine):
+    """
+    F5-TTS Russian - диффузионная модель синтеза речи.
+    
+    Модель: https://huggingface.co/hotstone228/F5-TTS-Russian
+    Установка: pip install f5-tts
+    Требования: GPU рекомендуется для реального времени
+    RTF: < 1.0 (быстрее реального времени на GPU)
+    """
+    
+    def __init__(self, sample_rate: int = 24000, device: str = 'auto'):
+        """
+        Инициализация F5-TTS.
+        
+        Args:
+            sample_rate: Частота дискретизации (F5-TTS использует 24000)
+            device: Устройство ('auto', 'cpu', 'cuda')
+        """
+        super().__init__(sample_rate)
+        self.device = device
+        self.model = None
+        self._load_model()
+    
+    def _load_model(self):
+        """Загрузка модели F5-TTS."""
+        try:
+            from f5_tts import F5TTS
+            
+            print("⏳ Загрузка F5-TTS Russian...")
+            self.model = F5TTS.from_pretrained(
+                "hotstone228/F5-TTS-Russian",
+                device=self.device
+            )
+            print("✓ F5-TTS Russian загружен")
+        except ImportError:
+            print("⚠ F5-TTS не установлен")
+            print("   Установите: pip install f5-tts")
+            self.model = None
+        except Exception as e:
+            print(f"⚠ Ошибка загрузки F5-TTS: {e}")
+            self.model = None
+    
+    def synthesize(self, text: str, speaker_id: Optional[int] = None) -> np.ndarray:
+        """
+        Синтез речи из текста.
+        
+        Args:
+            text: Текст для синтеза
+            speaker_id: ID спикера (опционально)
+            
+        Returns:
+            Аудиосигнал
+        """
+        if self.model is None:
+            raise RuntimeError("F5-TTS не загружен")
+        
+        try:
+            # Синтез через F5-TTS
+            audio = self.model.tts(
+                text=text,
+                speaker_id=speaker_id,
+                speed=1.0
+            )
+            
+            # Конвертация в numpy array
+            if hasattr(audio, 'cpu'):
+                audio = audio.cpu().numpy()
+            elif hasattr(audio, 'numpy'):
+                audio = audio.numpy()
+            
+            # Нормализация формы
+            if len(audio.shape) > 1:
+                audio = audio.flatten()
+            
+            # Ресемплинг если нужно
+            if self.sample_rate != 24000:
+                from scipy import signal
+                num_samples = int(len(audio) * self.sample_rate / 24000)
+                audio = signal.resample(audio, num_samples)
+            
+            # Нормализация амплитуды
+            if np.max(np.abs(audio)) > 0:
+                audio = audio / np.max(np.abs(audio)) * 0.95
+            
+            return audio.astype(np.float32)
+        except Exception as e:
+            raise RuntimeError(f"Ошибка синтеза F5-TTS: {e}")
+
+
 def create_tts_engine(engine_type: str = 'edge', **kwargs) -> Optional[TTSEngine]:
     """
     Создание TTS движка.
@@ -685,24 +775,28 @@ def create_tts_engine(engine_type: str = 'edge', **kwargs) -> Optional[TTSEngine
     # Пробуем в порядке приоритета
     engines_to_try = []
     
-    if engine_type_lower == 'xtts':
-        engines_to_try = ['xtts', 'bark', 'edge', 'gtts', 'silero', 'pyttsx3']
+    if engine_type_lower == 'f5-tts' or engine_type_lower == 'f5tts':
+        engines_to_try = ['f5-tts', 'edge', 'xtts', 'bark', 'silero', 'gtts', 'pyttsx3']
+    elif engine_type_lower == 'xtts':
+        engines_to_try = ['xtts', 'bark', 'edge', 'f5-tts', 'gtts', 'silero', 'pyttsx3']
     elif engine_type_lower == 'bark':
-        engines_to_try = ['bark', 'xtts', 'edge', 'gtts', 'silero', 'pyttsx3']
+        engines_to_try = ['bark', 'xtts', 'edge', 'f5-tts', 'gtts', 'silero', 'pyttsx3']
     elif engine_type_lower == 'edge':
-        engines_to_try = ['edge', 'xtts', 'bark', 'gtts', 'silero', 'pyttsx3']
+        engines_to_try = ['edge', 'xtts', 'bark', 'f5-tts', 'gtts', 'silero', 'pyttsx3']
     elif engine_type_lower == 'gtts':
-        engines_to_try = ['gtts', 'xtts', 'bark', 'edge', 'silero', 'pyttsx3']
+        engines_to_try = ['gtts', 'xtts', 'bark', 'edge', 'f5-tts', 'silero', 'pyttsx3']
     elif engine_type_lower == 'silero':
-        engines_to_try = ['silero', 'xtts', 'bark', 'edge', 'gtts', 'pyttsx3']
+        engines_to_try = ['silero', 'xtts', 'bark', 'edge', 'f5-tts', 'gtts', 'pyttsx3']
     elif engine_type_lower == 'pyttsx3':
-        engines_to_try = ['pyttsx3', 'xtts', 'bark', 'edge', 'gtts', 'silero']
+        engines_to_try = ['pyttsx3', 'xtts', 'bark', 'edge', 'f5-tts', 'gtts', 'silero']
     else:
         engines_to_try = [engine_type_lower]
     
     for eng_type in engines_to_try:
         try:
-            if eng_type == 'xtts':
+            if eng_type == 'f5-tts' or eng_type == 'f5tts':
+                return F5TTSEngine(**kwargs)
+            elif eng_type == 'xtts':
                 return CoquiXTTS(**kwargs)
             elif eng_type == 'bark':
                 return BarkTTS(**kwargs)
